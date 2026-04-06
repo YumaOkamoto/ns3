@@ -4,6 +4,7 @@
 #include "ns3/wifi-module.h"
 #include "ns3/mobility-module.h"
 #include "ns3/applications-module.h"
+#include "ns3/traffic-control-module.h" 
 #include <map>
 #include <vector>
 #include <cmath>
@@ -156,6 +157,13 @@ private:
     m_running = true;
     for (auto const& [chanIdx, data] : m_channelData) {
       Ptr<Socket> sock = Socket::CreateSocket (GetNode (), UdpSocketFactory::GetTypeId ());
+    /*
+      uint8_t priority = chanIdx % 8;
+      sock->SetPriority(priority);
+    */
+
+    sock->SetPriority(7); // 全チャネルを同一優先度に設定
+
       m_sockets_map[chanIdx] = sock;
       Simulator::Schedule (Seconds (chanIdx * 0.001), &ServerApp::SendPacket, this, chanIdx);
     }
@@ -207,7 +215,10 @@ int main (int argc, char *argv[]) {
   channel.AddPropagationLoss ("ns3::LogDistancePropagationLossModel", "Exponent", DoubleValue (3.0));
   channel.AddPropagationLoss ("ns3::NakagamiPropagationLossModel","m0",DoubleValue(5.0),"m1",DoubleValue(5.0),"m2",DoubleValue(5.0));
   phy.SetChannel (channel.Create ());
-  WifiMacHelper mac; mac.SetType ("ns3::AdhocWifiMac");
+  WifiMacHelper mac; 
+  // QoS有効のAdhocモードを使用
+  mac.SetType ("ns3::AdhocWifiMac",
+            "QosSupported", BooleanValue (true));
   NetDeviceContainer devices = wifi.Install (phy, mac, allNodes);
 
   MobilityHelper mobility;
@@ -219,6 +230,14 @@ int main (int argc, char *argv[]) {
   mobility.Install (allNodes);
 
   InternetStackHelper stack; stack.Install (allNodes);
+
+  // --- トラフィック制御による帯域の論理分割 ---
+  TrafficControlHelper tch;
+  // 各チャネルを平等に扱うためのキュー設定
+  //tch.SetRootQueueDisc ("ns3::FifoQueueDisc", "MaxSize", QueueSizeValue (QueueSize (QueueSizeUnit::PACKETS, 100)));
+  tch.SetRootQueueDisc ("ns3::FifoQueueDisc");
+  tch.Install (devices);
+
   Ipv4AddressHelper address; address.SetBase ("10.1.1.0", "255.255.255.0");
   Ipv4InterfaceContainer interfaces = address.Assign (devices);
   Ipv4StaticRoutingHelper staticRouting;
@@ -303,6 +322,9 @@ for (uint32_t i = 0; i < clientNodes.GetN(); ++i) {
 
 double LossRate = (1.0 - (double)totalReceivedByAllClients / (totalSentByServer * nNodes )) * 100;
 if (LossRate<0) LossRate=0;
+
+//logの出力
+phy.EnablePcap("dps-experiment",devices.Get(0));
 
 NS_LOG_UNCOND("【パケット欠損率】: " << LossRate << "%");
 
